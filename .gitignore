@@ -1,0 +1,12 @@
+# MSVC build output
+build/*
+!build/.gitkeep
+
+# solver output (regenerated on every run)
+results/
+
+# stray artifacts if anything is ever built outside build/
+*.exe
+*.obj
+*.ilk
+*.pdb
