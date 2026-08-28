@@ -1084,28 +1084,37 @@ void WRITE_FILE_TRANSIENT()
 
     out << fixed << setprecision(8);
 
+    //I and J count CELL CORNERS, not solution nodes: NCX+1 by NCY+1 corners enclose
+    //NCX by NCY full-size cells. X and Y are written for every corner, T for every
+    //cell, flagged CELLCENTERED. DATAPACKING=BLOCK is mandatory whenever VARLOCATION
+    //is used; F=POINT silently produces garbage. The index in ([3]=CELLCENTERED) is
+    //1-based, so 3 is T.
+    const int NCX = NI-2;
+    const int NCY = NJ-2;
+
     out << "TITLE = \"2D Transient Heat Conduction (cell-centred FVM)\"" << endl;
     out << "VARIABLES = \"X\", \"Y\", \"T\"" << endl;
+
     out << "ZONE T=\"t=" << simTime << "\""
-        << ", I=" << NI << ", J=" << NJ
-        << ", F=POINT"
+        << ", I=" << NCX+1 << ", J=" << NCY+1
+        << ", DATAPACKING=BLOCK, VARLOCATION=([3]=CELLCENTERED)"
         << ", STRANDID=1, SOLUTIONTIME=" << simTime << endl;
 
-    for (int j = 0; j < NJ; j++)
-    {
-        for (int i = 0; i < NI; i++)
-        {
-            out << XCELL[IDX(0,j,i)] << " " << XCELL[IDX(1,j,i)] << " " << T[ID(j,i)] << endl;
-        }
-    }
+    for (int j = 0; j <= NCY; j++)
+        for (int i = 0; i <= NCX; i++) out << (double)i*DELX << endl;
+
+    for (int j = 0; j <= NCY; j++)
+        for (int i = 0; i <= NCX; i++) out << (double)j*DELY << endl;
+
+    for (int j = 1; j < NCELLJ; j++)
+        for (int i = 1; i < NCELLI; i++) out << T[ID(j,i)] << endl;
 
     out.close();
 }
 
 void WRITE_FILE_TRANSIENT_VTK()
 {
-    //Same STRUCTURED_GRID reasoning as WRITE_FILE_CG_VTK() above; numbered so ParaView
-    //picks the files up as a time series automatically.
+    //Numbered so ParaView picks the files up as a time series automatically.
     char fname[512];
     snprintf(fname, sizeof(fname), OUTPUT_DIR "/temperature_%05d.vtk", TIMESTEP);
 
@@ -1118,31 +1127,47 @@ void WRITE_FILE_TRANSIENT_VTK()
 
     out << fixed << setprecision(8);
 
+    //CELL-CENTRED OUTPUT. The grid written here is the set of CELL CORNERS
+    //(0, DELX, 2*DELX, ... LX): NCX+1 by NCY+1 points enclosing NCX by NCY full-size
+    //cells, with T written as CELL_DATA. Writing the SOLUTION NODES as grid points
+    //instead produces half-width slivers along every wall, because a boundary node
+    //sits only DELX/2 from the first cell centre. Those slivers are a rendering
+    //artefact of point data on a cell-centred mesh, not a mesh defect: every real
+    //control volume is DELX by DELY.
+    //
+    //RECTILINEAR_GRID rather than STRUCTURED_GRID because a uniform Cartesian mesh
+    //needs only three coordinate axes instead of NCX*NCY explicit point triples.
+    //Switch back to STRUCTURED_GRID when the mesh becomes curvilinear.
+    //
+    //DIMENSIONS counts POINTS, so NCX+1 yields NCX cells. CELL_DATA must be exactly
+    //NCX*NCY or ParaView rejects the file.
+    const int NCX = NI-2;
+    const int NCY = NJ-2;
+
     out << "# vtk DataFile Version 3.0" << endl;
-    out << "2D Transient Heat Conduction, t = " << simTime << endl;
+    out << "2D Transient Heat Conduction (cell-centred FVM), t = " << simTime << endl;
     out << "ASCII" << endl;
-    out << "DATASET STRUCTURED_GRID" << endl;
-    out << "DIMENSIONS " << NI << " " << NJ << " " << 1 << endl;
-    out << "POINTS " << NI*NJ << " double" << endl;
+    out << "DATASET RECTILINEAR_GRID" << endl;
+    out << "DIMENSIONS " << NCX+1 << " " << NCY+1 << " " << 1 << endl;
 
-    for (int j = 0; j < NJ; j++)
-    {
-        for (int i = 0; i < NI; i++)
-        {
-            out << XCELL[IDX(0,j,i)] << " " << XCELL[IDX(1,j,i)] << " " << 0.0 << endl;
-        }
-    }
+    out << "X_COORDINATES " << NCX+1 << " double" << endl;
+    for (int i = 0; i <= NCX; i++) out << (double)i*DELX << endl;
 
-    out << "POINT_DATA " << NI*NJ << endl;
+    out << "Y_COORDINATES " << NCY+1 << " double" << endl;
+    for (int j = 0; j <= NCY; j++) out << (double)j*DELY << endl;
+
+    out << "Z_COORDINATES 1 double" << endl;
+    out << 0.0 << endl;
+
+    out << "CELL_DATA " << NCX*NCY << endl;
     out << "SCALARS Temperature double 1" << endl;
     out << "LOOKUP_TABLE default" << endl;
 
-    for (int j = 0; j < NJ; j++)
+    for (int j = 1; j < NCELLJ; j++)
     {
-        for (int i = 0; i < NI; i++)
+        for (int i = 1; i < NCELLI; i++)
         {
-            const size_t p = ID(j, i);
-            out << T[p] << endl;
+            out << T[ID(j,i)] << endl;
         }
     }
 
