@@ -1,3 +1,6 @@
+//to execute: nvcc -arch=sm_89 -std=c++17 -Xcompiler "/O2 /EHsc /Zc:preprocessor" -o heat2d_cuda.exe beta_formulation_cuda.cu
+// .\heat2d_cuda.exe [beta] [ni] [nj]
+
 #include <iostream>
 #include <math.h>
 #include <stdio.h>
