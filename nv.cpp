@@ -142,7 +142,7 @@ int TIMESTEP;
 #define CFL_TARGET 0.5
 #define DT_ACCURACY 0.01
 #define DT_FLOOR 1.0e-8
-#define TMAX 10.0
+#define TMAX 150.0
 #define VN_SAFETY 0.8
 #define MAXSTEP 2000000
 
