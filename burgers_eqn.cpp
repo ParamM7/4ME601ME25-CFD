@@ -172,7 +172,7 @@ double nu;
 
 double deltaT;
 
-#define CFL_TARGET 0.40
+#define CFL_TARGET 0.20
 #define DT_FLOOR 5.0e-8
 #define TMAX 1.0
 #define MAXSTEP 200000
@@ -188,37 +188,39 @@ void MAKE_OUTPUT_DIR();
 #define ADV_OPERATOR CW, CE, CS, CN, CWW, CEE, CSS, CNN, CP
 #define DIFF_OPERATOR DW, DE, DS, DN, ZEROF, ZEROF, ZEROF, ZEROF, DP
 
-#define AU_WEST 0.0
-#define BU_WEST 1.0
-#define CU_WEST 0.0
+// ---- x-momentum, u ---------------------------------------------------------
+#define AU_WEST   0.0
+#define BU_WEST   1.0
+#define CU_WEST   1.0          // inflow, u = 1
 
-#define AU_SOUTH 0.0
-#define BU_SOUTH 1.0
-#define CU_SOUTH 0.0
+#define AU_SOUTH  0.0
+#define BU_SOUTH  1.0
+#define CU_SOUTH  1.0          // inflow, u = 1
 
-#define AU_EAST 0.0
-#define BU_EAST 1.0
-#define CU_EAST 0.0
+#define AU_EAST   1.0
+#define BU_EAST   0.0
+#define CU_EAST   0.0          // outflow, zero-gradient
 
-#define AU_NORTH 0.0
-#define BU_NORTH 1.0
-#define CU_NORTH U_REF
+#define AU_NORTH  1.0
+#define BU_NORTH  0.0
+#define CU_NORTH  0.0          // outflow, zero-gradient
 
+// ---- y-momentum, v ---------------------------------------------------------
 #define AV_WEST   0.0
 #define BV_WEST   1.0
-#define CV_WEST   0.0
+#define CV_WEST   1.0          // inflow, v = 1
 
 #define AV_SOUTH  0.0
 #define BV_SOUTH  1.0
-#define CV_SOUTH  0.0
+#define CV_SOUTH  1.0          // inflow, v = 1
 
-#define AV_EAST   0.0
-#define BV_EAST   1.0
-#define CV_EAST   0.0
+#define AV_EAST   1.0
+#define BV_EAST   0.0
+#define CV_EAST   0.0          // outflow, zero-gradient
 
-#define AV_NORTH  0.0
-#define BV_NORTH  1.0
-#define CV_NORTH  0.0
+#define AV_NORTH  1.0
+#define BV_NORTH  0.0
+#define CV_NORTH  0.0   
 
 double BC_A_W[2], BC_B_W[2], BC_C_W[2];
 double BC_A_S[2], BC_B_S[2], BC_C_S[2];

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include <errno.h>
+#include <chrono>
 
 #if defined(_WIN32)
     #include <direct.h>
@@ -17,7 +18,7 @@
 
 using namespace std;
 
-#define NI 500
+#define NI 100
 #define NJ 100
 
 void SET_GEOMETRY();
@@ -51,7 +52,7 @@ void APPLYBC_TEMP_TRANSIENT();
 double UPDATE_TRANSIENT();
 void WRITE_FILE_TRANSIENT_VTK();
 
-double BETA = 1.0;
+double BETA = 0.5;
 
 #define OUTPUT_DIR "results"
 
@@ -202,6 +203,7 @@ double nextWriteTime = WRITE_INTERVAL;   //dump a field file every N timesteps
 void MAKE_OUTPUT_DIR();
 
 int main(int argc, char* argv[]){
+    const auto t_wall_start = std::chrono::steady_clock::now();
     CCSS = 1e-13;
     LX = 1.0;
     LY = 1.0;
@@ -283,7 +285,16 @@ int main(int argc, char* argv[]){
             << " per timestep)" << endl;
     }
 
-    
+    const auto t_wall_end = std::chrono::steady_clock::now();
+    const double wall_s = std::chrono::duration<double>(t_wall_end - t_wall_start).count();
+
+    cout << "WALLTIME: " << fixed << setprecision(3) << wall_s << " s"
+         << "   (" << TIMESTEP << " steps, "
+         << scientific << setprecision(3)
+         << wall_s/(double)(TIMESTEP > 0 ? TIMESTEP : 1) << " s/step, "
+         << (double)TIMESTEP*(double)(NI-2)*(double)(NJ-2)/wall_s
+         << " node-updates/s)" << endl;
+
     return (0);
     
 }

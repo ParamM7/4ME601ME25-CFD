@@ -48,8 +48,6 @@ void WRITE_FILE_CG();
 void WRITE_FILE_CG_VTK();
 
 void APPLYIC_TRANSIENT();
-void FILL_CORNERS();
-void REPORT_POSITIVITY();
 void CALC_COEFF_TRANSIENT();
 void BUILD_RHS_TRANSIENT();
 void SOLVER_TRANSIENT();
@@ -60,8 +58,6 @@ void CALC_FOURIER();
 void APPLYBC_TEMP_TRANSIENT();
 double UPDATE_TRANSIENT();
 void WRITE_FILE_TRANSIENT_VTK();
-void CHECK_FLUX_BALANCE();
-void SET_SOURCE();
 
 double BETA = 1.0;
 
@@ -72,20 +68,15 @@ double BETA = 1.0;
 bool VERBOSE = false;
 
 Field XCELL;
-Field XC, YC;
 Field SP;
 Field T, T_old_time;
 Field AW, AE, AS, AN, AP;
 Field AW1, AE1, AS1, AN1, AP1;
 Field TCG, RES, PDIR, AP_CG;
-Field QVOL;
-Field QSLOPE;
 
 void ALLOCATE_FIELDS();
 
 double DELX, DELY;
-double AFX, AFY;
-double VOL;
 
 int k, l, ITER;
 int NCELLI;
@@ -187,8 +178,6 @@ int TIMESTEP;
 #define kT 1.0 //thermal conductivity
 #define rho 1.0 //density
 #define Cp 1.0 //specific heat
-#define Q_GEN 10.0;
-#define Q_SLOPE 0.0;
 
 double deltaT;
 
@@ -242,18 +231,14 @@ int main(int argc, char* argv[]){
     NCELLI = NI-1;
     NCELLJ = NJ-1;
 
-    cout<< "GRID    : NI = " << NI << "   NJ = " << NJ
-        << "   -> " << NI-2 << " x " << NJ-2 << " cells" << endl;
-    cout<< "          (" << (size_t)(NI-2)*(NJ-2) << " unknowns, "
-        << 2*((NI-2)+(NJ-2)) << " boundary face nodes)" << endl;
+    cout<< "GRID: NI = " << NI << "   NJ = " << NJ << endl;
+    cout<< "    ("<< (size_t)NI*NJ << "nodes)" <<endl;
     
     ALLOCATE_FIELDS();
 
     MAKE_OUTPUT_DIR();
 
     SET_GEOMETRY();
-
-    SET_SOURCE();
 
     SET_DELTAT();
 
@@ -315,8 +300,6 @@ int main(int argc, char* argv[]){
     WRITE_FILE_TRANSIENT();
     WRITE_FILE_TRANSIENT_VTK();
 
-    CHECK_FLUX_BALANCE();
-
     if(BETA >= BETA_ZERO_TOL)
     {
         cout << "Total CG iterations = " << TOTAL_CG_ITER
@@ -344,11 +327,7 @@ void ALLOCATE_FIELDS()
     const size_t N = (size_t)NI*NJ;
 
     XCELL.assign(2*N, 0.0);
-    XC.assign((size_t)NI, 0.0);
-    YC.assign((size_t)NJ, 0.0);
     SP.assign(N, 0.0);
-    QVOL.assign(N, 0.0);
-    QSLOPE.assign(N, 0.0);
 
     T.assign(N, 0.0);
     T_old_time.assign(N, 0.0);
@@ -372,58 +351,37 @@ void ALLOCATE_FIELDS()
 }
 
 void SET_GEOMETRY()
-{   
-    const int NCX = NI-2;
-    const int NCY = NJ-2;
-
-    DELX = LX/(double)NCX;
-    DELY = LY/(double)NCY;
-    AFX = DELX;
-    AFY = DELY;
-    VOL = DELX*DELY;
-
-    for(int i=0; i<NI; i++)
-    {
-        if(i==0)    XC[i] = 0.0;
-        else if(i==NI-1) XC[i] = LX;
-        else XC[i] = DELX*(double)(i-1) + 0.5*DELX;
-    }
-
-    for(int j=0; j<NJ; j++)
-    {
-        if(j==0)    YC[j] = 0.0;
-        else if(j==NJ-1) YC[j] = LY;
-        else YC[j] = DELY*(double)(j-1) + 0.5*DELY;
-    }
+{
+    DELX = LX/(NI-1);
+    DELY = LY/(NJ-1);
 
     for(int j=0; j<NJ; j++){
        for(int i=0;i<NI;i++){
-        XCELL[IDX(0,j,i)] = XC[i];
-        XCELL[IDX(1,j,i)] = YC[j];
+        XCELL[IDX(0,j,i)] = DELX*i;
+        XCELL[IDX(1,j,i)] = DELY*j;
+
        }
      }
 }
 
-void SET_SOURCE()
+void CALC_COEFF()
 {
-    for(int j=1; j<NCELLJ; j++)
+    for(int j=1;j<NCELLJ;j++)
     {
-        for(int i=1; i<NCELLI; i++)
+        for(int i=1;i<NCELLI;i++)
         {
             const size_t p = ID(j,i);
 
-            QVOL[p] = Q_GEN;
-            QSLOPE[p] = Q_SLOPE;
-            
-            if(QSLOPE[p] > 0.0)
-            {
-                cout << "ERROR: QSLOPE must be <= 0 (Patankar). Got "
-                     << QSLOPE[p] << " at (" << j << "," << i << ")." << endl;
-                exit(1);
-            }
+            AW[p] = 1.0/(DELX*DELX);
+            AE[p] = 1.0/(DELX*DELX);
+            AS[p] = 1.0/(DELY*DELY);
+            AN[p] = 1.0/(DELY*DELY);
+
+            AP[p] = AW[p]+AE[p]+AS[p]+AN[p];
         }
     }
 }
+
 
 //CONJUGATE GRADIENT
 
@@ -445,11 +403,6 @@ void APPLYIC_CG()
 
 void APPLYBC_TEMP_CG()
 {
-    const double dWb = XC[1] - XC[0];
-    const double dSb = YC[1] - YC[0];
-    const double dEb = XC[NI-1] - XC[NI-2];
-    const double dNb = YC[NJ-1] - YC[NJ-2];
-
     //using generalized boundary condition c+a(dT/dn)=bT
     double a1,a2,a3,a4,b1,b2,b3,b4,c1,c2,c3,c4;
 
@@ -457,25 +410,25 @@ void APPLYBC_TEMP_CG()
     a1 = A_WEST;b1=B_WEST;c1=C_WEST;
     for(int j=0;j<NJ;j++)
     {
-       TCG[ID(j,0)] = (a1*TCG[ID(j,1)]+c1*dWb)/(a1+b1*dWb);
+       TCG[ID(j,0)] = (a1*TCG[ID(j,1)]+c1*DELX)/(a1+b1*DELX);
     }
     //south
     a2 = A_SOUTH;b2=B_SOUTH;c2=C_SOUTH;
     for(int i=1;i<NCELLI;i++)
     {       
-        TCG[ID(0,i)] = (a2*TCG[ID(1,i)]+c2*dSb)/(a2+b2*dSb);
+        TCG[ID(0,i)] = (a2*TCG[ID(1,i)]+c2*DELY)/(a2+b2*DELY);
     }
     //east
     a3 = A_EAST;b3=B_EAST;c3=C_EAST;
     for(int j=0;j<NJ;j++)
     {        
-        TCG[ID(j,NCELLI)] = (a3*TCG[ID(j,NCELLI-1)]+c3*dEb)/(a3+b3*dEb);
+        TCG[ID(j,NCELLI)] = (a3*TCG[ID(j,NCELLI-1)]+c3*DELX)/(a3+b3*DELX);
     }
     //north
     a4 = A_NORTH;b4=B_NORTH;c4=C_NORTH;
     for(int i=1;i<NCELLI;i++)
     {        
-        TCG[ID(NCELLJ,i)] = (a4*TCG[ID(NCELLJ-1,i)]+c4*dNb)/(a4+b4*dNb);
+        TCG[ID(NCELLJ,i)] = (a4*TCG[ID(NCELLJ-1,i)]+c4*DELY)/(a4+b4*DELY);
     }
 
 }
@@ -746,68 +699,36 @@ void APPLYIC_TRANSIENT()
 
 void APPLYBC_TEMP_TRANSIENT()
 {
-    const double dWb = XC[1] - XC[0];
-    const double dSb = YC[1] - YC[0];
-    const double dEb = XC[NI-1] - XC[NI-2];
-    const double dNb = YC[NJ-1] - YC[NJ-2];
-
     double a1,a2,a3,a4,b1,b2,b3,b4,c1,c2,c3,c4;
 
     //west
     a1 = A_WEST;b1=B_WEST;c1=C_WEST;
     for(int j=0;j<NJ;j++)
     {
-        T[ID(j,0)] = (a1*T[ID(j,1)]+c1*dWb)/(a1+b1*dWb);
-        T_old_time[ID(j,0)] = (a1*T_old_time[ID(j,1)]+c1*dWb)/(a1+b1*dWb);
+        T[ID(j,0)] = (a1*T[ID(j,1)]+c1*DELX)/(a1+b1*DELX);
+        T_old_time[ID(j,0)] = (a1*T_old_time[ID(j,1)]+c1*DELX)/(a1+b1*DELX);
     }
     //south
     a2 = A_SOUTH;b2=B_SOUTH;c2=C_SOUTH;
     for(int i=1;i<NCELLI;i++)
     {
-        T[ID(0,i)] = (a2*T[ID(1,i)]+c2*dSb)/(a2+b2*dSb);
-        T_old_time[ID(0,i)] = (a2*T_old_time[ID(1,i)]+c2*dSb)/(a2+b2*dSb);
+        T[ID(0,i)] = (a2*T[ID(1,i)]+c2*DELY)/(a2+b2*DELY);
+        T_old_time[ID(0,i)] = (a2*T_old_time[ID(1,i)]+c2*DELY)/(a2+b2*DELY);
     }
     //east
     a3 = A_EAST;b3=B_EAST;c3=C_EAST;
     for(int j=0;j<NJ;j++)
     {
-        T[ID(j,NCELLI)] = (a3*T[ID(j,NCELLI-1)]+c3*dEb)/(a3+b3*dEb);
-        T_old_time[ID(j,NCELLI)] = (a3*T_old_time[ID(j,NCELLI-1)]+c3*dEb)/(a3+b3*dEb);
+        T[ID(j,NCELLI)] = (a3*T[ID(j,NCELLI-1)]+c3*DELX)/(a3+b3*DELX);
+        T_old_time[ID(j,NCELLI)] = (a3*T_old_time[ID(j,NCELLI-1)]+c3*DELX)/(a3+b3*DELX);
     }
     //north
     a4 = A_NORTH;b4=B_NORTH;c4=C_NORTH;
     for(int i=1;i<NCELLI;i++)
     {
-        T[ID(NCELLJ,i)] = (a4*T[ID(NCELLJ-1,i)]+c4*dNb)/(a4+b4*dNb);
-        T_old_time[ID(NCELLJ,i)] = (a4*T_old_time[ID(NCELLJ-1,i)]+c4*dNb)/(a4+b4*dNb);
+        T[ID(NCELLJ,i)] = (a4*T[ID(NCELLJ-1,i)]+c4*DELY)/(a4+b4*DELY);
+        T_old_time[ID(NCELLJ,i)] = (a4*T_old_time[ID(NCELLJ-1,i)]+c4*DELY)/(a4+b4*DELY);
     }
-
-    FILL_CORNERS();
-}
-
-void FILL_CORNERS()
-{
-   T[ID(0,0)] = 0.5*(T[ID(0,1)] + T[ID(1,0)]);
-   T[ID(0,NI-1)] = 0.5*(T[ID(0,NI-2)] + T[ID(1,NI-1)]);
-   T[ID(NJ-1,0)] = 0.5*(T[ID(NJ-1,1)] + T[ID(NJ-2,0)]);
-   T[ID(NJ-1,NI-1)] = 0.5*(T[ID(NJ-1,NI-2)] + T[ID(NJ-2,NI-1)]);
-
-}
-
-void REPORT_POSITIVITY()
-{
-    if(BETA >=1 -1e-12)
-    {
-        return;
-    }
-
-    const double pos_lim = 1.0/(3.0*(1.0-BETA));
-    const double Fo_sum  = Fo_x + Fo_y;
-
-    cout << "POSITIV : corner-cell limit Fo_x+Fo_y <= " << fixed << setprecision(6)
-         << pos_lim
-         << (Fo_sum > pos_lim ? "   -> VIOLATED (oscillation possible)"
-                              : "   -> satisfied") << endl;
 }
 
 double FO_LIMIT()
@@ -830,7 +751,6 @@ void CHECK_STABILITY()
         cout << "STABIL  : Fo_x+Fo_y = " << fixed << setprecision(6) << Fo_sum
              << "   BETA = " << BETA << " >= 0.5 -> unconditionally stable"
              << " (dt is set by ACCURACY, not stability)" << endl;
-        REPORT_POSITIVITY();
         return;
     }
 
@@ -839,8 +759,6 @@ void CHECK_STABILITY()
     cout << "STABIL  : Fo_x+Fo_y = " << fixed << setprecision(6) << Fo_sum
          << "   limit = " << Fo_lim
          << "   dt_max = " << scientific << setprecision(4) << dt_max << endl;
-
-    REPORT_POSITIVITY();
 
     if(Fo_sum > Fo_lim)
     {
@@ -896,56 +814,33 @@ void CALC_FOURIER()
 //  AP1/AW1/../AN1  act on level n   (additive),    with AP1 + (AW1+AE1+AS1+AN1) = 1
 void CALC_COEFF_TRANSIENT()
 {
-    const double fac = alpha*deltaT/VOL;
-    double sum_max = 0.0;
-
     for(int j=1;j<NCELLJ;j++)
     {
-        const double dS = YC[j] - YC[j-1];
-        const double dN = YC[j+1] - YC[j];
-
         for(int i=1;i<NCELLI;i++)
         {
-
             const size_t p = ID(j,i);
+            AW[p] = BETA*Fo_x;
+            AE[p] = BETA*Fo_x;
+            AN[p] = BETA*Fo_y;
+            AS[p] = BETA*Fo_y;
 
-            const double dW = XC[i] - XC[i-1];
-            const double dE = XC[i+1] - XC[i];
+            AP[p] = 1.0 + 2.0*BETA*(Fo_x + Fo_y);
 
-            const double Dw = fac*AFX/dW;
-            const double De = fac*AFX/dE;
-            const double Ds = fac*AFY/dS;
-            const double Dn = fac*AFY/dN;
-            const double Ssp = -QSLOPE[p]*deltaT/(rho*Cp);
-            const double Dsum = Dw + De + Ds + Dn + Ssp;
+            AW1[p] = (1.0-BETA)*Fo_x;
+            AE1[p] = (1.0-BETA)*Fo_x;
+            AN1[p] = (1.0-BETA)*Fo_y;
+            AS1[p] = (1.0-BETA)*Fo_y;
 
-            AW[p] = BETA*Dw;
-            AE[p] = BETA*De;
-            AN[p] = BETA*Dn;
-            AS[p] = BETA*Ds;
-
-            AP[p] = 1.0 + BETA*Dsum;
-
-            AW1[p] = (1.0-BETA)*Dw;
-            AE1[p] = (1.0-BETA)*De;
-            AN1[p] = (1.0-BETA)*Dn;
-            AS1[p] = (1.0-BETA)*Ds;
-
-            AP1[p] = 1.0 - (1.0-BETA)*Dsum;
-
-            if(Dsum > sum_max) sum_max = Dsum;
+            AP1[p] = 1.0 - 2.0*(1.0-BETA)*(Fo_x + Fo_y);
         }
     }
-    
-    const double ap1_min = 1.0 - (1.0-BETA)*sum_max;
 
-    if(ap1_min < 0.0)
+    if(AP1[ID(1,1)] < 0.0)
     {
-        cout << "WARNING : min AP1 = " << fixed << setprecision(4) << ap1_min
-             << " < 0 violates Patankar's positive-coefficient rule at the corner"
-             << " cells. The scheme is still stable but the solution may oscillate;"
-             << " non-oscillatory behaviour needs 3*(Fo_x+Fo_y) <= 1/(1-BETA)."
-             << endl;
+        cout << "WARNING : AP1 = " << fixed << setprecision(4) << AP1[ID(1,1)]
+             << " < 0 violates Patankar's positive-coefficient rule. The scheme is"
+             << " stable but the solution may oscillate; non-oscillatory behaviour"
+             << " needs Fo_x + Fo_y <= 1/(2*(1-BETA))." << endl;
     }
 }
 
@@ -959,10 +854,7 @@ void BUILD_RHS_TRANSIENT()
     const double* RESTRICT as1 = AS1.data();
     const double* RESTRICT an1 = AN1.data();
     const double* RESTRICT told = T_old_time.data();
-    const double* RESTRICT qv = QVOL.data();
     double* RESTRICT sp = SP.data();
-
-    const double qfac = deltaT/(rho*Cp);
 
     for(int j=1; j<ncellj; j++)
     {
@@ -974,7 +866,7 @@ void BUILD_RHS_TRANSIENT()
 
             sp[p] = ap1[p]*told[p]
                   + aw1[p]*told[p-1]  + ae1[p]*told[p+1]
-                  + as1[p]*told[p-ni] + an1[p]*told[p+ni] + qfac*qv[p];
+                  + as1[p]*told[p-ni] + an1[p]*told[p+ni];
         }
     }
 }
@@ -1059,37 +951,28 @@ void WRITE_FILE_TRANSIENT()
 
     out << fixed << setprecision(8);
 
-    //I and J count CELL CORNERS, not solution nodes: NCX+1 by NCY+1 corners enclose
-    //NCX by NCY full-size cells. X and Y are written for every corner, T for every
-    //cell, flagged CELLCENTERED. DATAPACKING=BLOCK is mandatory whenever VARLOCATION
-    //is used; F=POINT silently produces garbage. The index in ([3]=CELLCENTERED) is
-    //1-based, so 3 is T.
-    const int NCX = NI-2;
-    const int NCY = NJ-2;
-
-    out << "TITLE = \"2D Transient Heat Conduction (cell-centred FVM)\"" << endl;
+    out << "TITLE = \"2D Transient Heat Conduction (FDM)\"" << endl;
     out << "VARIABLES = \"X\", \"Y\", \"T\"" << endl;
-
     out << "ZONE T=\"t=" << simTime << "\""
-        << ", I=" << NCX+1 << ", J=" << NCY+1
-        << ", DATAPACKING=BLOCK, VARLOCATION=([3]=CELLCENTERED)"
+        << ", I=" << NI << ", J=" << NJ
+        << ", F=POINT"
         << ", STRANDID=1, SOLUTIONTIME=" << simTime << endl;
 
-    for (int j = 0; j <= NCY; j++)
-        for (int i = 0; i <= NCX; i++) out << (double)i*DELX << endl;
-
-    for (int j = 0; j <= NCY; j++)
-        for (int i = 0; i <= NCX; i++) out << (double)j*DELY << endl;
-
-    for (int j = 1; j < NCELLJ; j++)
-        for (int i = 1; i < NCELLI; i++) out << T[ID(j,i)] << endl;
+    for (int j = 0; j < NJ; j++)
+    {
+        for (int i = 0; i < NI; i++)
+        {
+            out << XCELL[IDX(0,j,i)] << " " << XCELL[IDX(1,j,i)] << " " << T[ID(j,i)] << endl;
+        }
+    }
 
     out.close();
 }
 
 void WRITE_FILE_TRANSIENT_VTK()
 {
-    //Numbered so ParaView picks the files up as a time series automatically.
+    //Same STRUCTURED_GRID reasoning as WRITE_FILE_CG_VTK() above; numbered so ParaView
+    //picks the files up as a time series automatically.
     char fname[512];
     snprintf(fname, sizeof(fname), OUTPUT_DIR "/temperature_%05d.vtk", TIMESTEP);
 
@@ -1102,47 +985,31 @@ void WRITE_FILE_TRANSIENT_VTK()
 
     out << fixed << setprecision(8);
 
-    //CELL-CENTRED OUTPUT. The grid written here is the set of CELL CORNERS
-    //(0, DELX, 2*DELX, ... LX): NCX+1 by NCY+1 points enclosing NCX by NCY full-size
-    //cells, with T written as CELL_DATA. Writing the SOLUTION NODES as grid points
-    //instead produces half-width slivers along every wall, because a boundary node
-    //sits only DELX/2 from the first cell centre. Those slivers are a rendering
-    //artefact of point data on a cell-centred mesh, not a mesh defect: every real
-    //control volume is DELX by DELY.
-    //
-    //RECTILINEAR_GRID rather than STRUCTURED_GRID because a uniform Cartesian mesh
-    //needs only three coordinate axes instead of NCX*NCY explicit point triples.
-    //Switch back to STRUCTURED_GRID when the mesh becomes curvilinear.
-    //
-    //DIMENSIONS counts POINTS, so NCX+1 yields NCX cells. CELL_DATA must be exactly
-    //NCX*NCY or ParaView rejects the file.
-    const int NCX = NI-2;
-    const int NCY = NJ-2;
-
     out << "# vtk DataFile Version 3.0" << endl;
-    out << "2D Transient Heat Conduction (cell-centred FVM), t = " << simTime << endl;
+    out << "2D Transient Heat Conduction, t = " << simTime << endl;
     out << "ASCII" << endl;
-    out << "DATASET RECTILINEAR_GRID" << endl;
-    out << "DIMENSIONS " << NCX+1 << " " << NCY+1 << " " << 1 << endl;
+    out << "DATASET STRUCTURED_GRID" << endl;
+    out << "DIMENSIONS " << NI << " " << NJ << " " << 1 << endl;
+    out << "POINTS " << NI*NJ << " double" << endl;
 
-    out << "X_COORDINATES " << NCX+1 << " double" << endl;
-    for (int i = 0; i <= NCX; i++) out << (double)i*DELX << endl;
+    for (int j = 0; j < NJ; j++)
+    {
+        for (int i = 0; i < NI; i++)
+        {
+            out << XCELL[IDX(0,j,i)] << " " << XCELL[IDX(1,j,i)] << " " << 0.0 << endl;
+        }
+    }
 
-    out << "Y_COORDINATES " << NCY+1 << " double" << endl;
-    for (int j = 0; j <= NCY; j++) out << (double)j*DELY << endl;
-
-    out << "Z_COORDINATES 1 double" << endl;
-    out << 0.0 << endl;
-
-    out << "CELL_DATA " << NCX*NCY << endl;
+    out << "POINT_DATA " << NI*NJ << endl;
     out << "SCALARS Temperature double 1" << endl;
     out << "LOOKUP_TABLE default" << endl;
 
-    for (int j = 1; j < NCELLJ; j++)
+    for (int j = 0; j < NJ; j++)
     {
-        for (int i = 1; i < NCELLI; i++)
+        for (int i = 0; i < NI; i++)
         {
-            out << T[ID(j,i)] << endl;
+            const size_t p = ID(j, i);
+            out << T[p] << endl;
         }
     }
 
@@ -1160,49 +1027,4 @@ void MAKE_OUTPUT_DIR()
     }
 
     cout << "OUTPUT  : " << OUTPUT_DIR << "/" << endl;
-}
-
-void CHECK_FLUX_BALANCE()
-{
-    const double dWb = XC[1]      - XC[0];
-    const double dEb = XC[NI-1]   - XC[NI-2];
-    const double dSb = YC[1]      - YC[0];
-    const double dNb = YC[NJ-1]   - YC[NJ-2];
-
-    double Qw = 0.0, Qe = 0.0, Qs = 0.0, Qn = 0.0;
-
-    for(int j=1;j<NCELLJ;j++)
-    {
-        Qw += kT*AFX*(T[ID(j,0)]      - T[ID(j,1)])/dWb;
-        Qe += kT*AFX*(T[ID(j,NI-1)]   - T[ID(j,NI-2)])/dEb;
-    }
-
-    for(int i=1;i<NCELLI;i++)
-    {
-        Qs += kT*AFY*(T[ID(0,i)]      - T[ID(1,i)])/dSb;
-        Qn += kT*AFY*(T[ID(NJ-1,i)]   - T[ID(NJ-2,i)])/dNb;
-    }
-
-    double Qgen = 0.0;
-
-    for(int j=1; j<NCELLJ; j++)
-    {
-        for(int i=1; i<NCELLI;i++)
-        {
-            const size_t p = ID(j,i);
-            Qgen += (QVOL[p]+QSLOPE[p]*T[p])*VOL;
-        }
-    }
-
-    const double net   = Qw + Qe + Qs + Qn + Qgen;
-    const double scale = fabs(Qw)+fabs(Qe)+fabs(Qs)+fabs(Qn) + fabs(Qgen);
-
-    cout << "BALANCE : Qw = " << scientific << setprecision(4) << Qw
-         << "   Qe = " << Qe << "   Qs = " << Qs << "   Qn = " << Qn << endl;
-    cout << "          net = " << net
-         << "   normalised = " << (scale > 0.0 ? net/scale : 0.0)
-         << "   (-> 0 at steady state)" << endl;
-    cout << "          Qgen = " << Qgen << "   net = " << net
-        << "   normalised = " << (scale > 0.0 ? net/scale : 0.0)
-        << "   (-> 0 at steady state)" << endl;
 }

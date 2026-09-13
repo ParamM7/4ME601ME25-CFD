@@ -278,7 +278,7 @@ double Fo_x, Fo_y; //Fourier number
 
 #define TMAX        1.0     //stop time; the diffusion timescale L^2/alpha is 1 here
 #define MAXSTEP     200000  //hard cap on physical timesteps
-double WRITE_INTERVAL = 1e-2; //time interval between writes
+double WRITE_INTERVAL = 2e-2; //time interval between writes
 double nextWriteTime = WRITE_INTERVAL;   //dump a field file every N timesteps
 #define DT_SAFETY   0.8     //BETA < 0.5: fraction of the conditional stability limit
 #define DT_ACCURACY 1.0e-3  //BETA >= 0.5: dt chosen for accuracy
@@ -930,7 +930,7 @@ int main(int argc, char* argv[]){
             const auto t_io0 = std::chrono::steady_clock::now();
 
             FETCH_FIELD();
-            WRITE_FILE_TRANSIENT();
+            //WRITE_FILE_TRANSIENT();
             WRITE_FILE_TRANSIENT_VTK();
 
             io_s += std::chrono::duration<double>(
