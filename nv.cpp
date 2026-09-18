@@ -879,16 +879,22 @@ void PREDICTOR()
 
 void CALC_DIVERGENCE(const Field& UU, const Field& VV)
 {
-    const double* RESTRICT uu= UU.data();
+    const double* RESTRICT uu = UU.data();
     const double* RESTRICT vv = VV.data();
-    double * RESTRICT d = DIV.data();
+    double* RESTRICT d = DIV.data();
+
+    const double invVOL = 1.0/VOL;
 
     for(int j=1; j<=NY; j++)
     {
         for(int i=1; i<=NX; i++)
         {
-            d[IDP(j,i)] = (uu[IDU(j,i)] - uu[IDU(j,i-1)])/DELX
-                        + (vv[IDV(j,i)] - vv[IDV(j-1,i)])/DELY;
+            const double Fw = -uu[IDU(j,i-1)]*AFX;   // n_w = (-1, 0)
+            const double Fe =  uu[IDU(j,i  )]*AFX;   // n_e = (+1, 0)
+            const double Fs = -vv[IDV(j-1,i)]*AFY;   // n_s = ( 0,-1)
+            const double Fn =  vv[IDV(j,  i)]*AFY;   // n_n = ( 0,+1)
+
+            d[IDP(j,i)] = (Fe + Fw + Fn + Fs)*invVOL;
         }
     }
 }
