@@ -130,7 +130,7 @@ double CALC_NORM_L1(const Field& ARR)
 //solver control parameters
 
 #define rho 1.0
-#define U_LID 1.0
+#define U_IN 1.0
 
 double RE = 100.0;
 double nu;
@@ -145,6 +145,7 @@ int TIMESTEP;
 #define TMAX 150.0
 #define VN_SAFETY 0.8
 #define MAXSTEP 2000000
+#define PRINT_EVERY 10
 
 double WRITE_INTERVAL = 0.5;
 double nextWriteTime = WRITE_INTERVAL;
@@ -178,10 +179,10 @@ double WORST_DIV = 0.0;
 //u
 #define AU_WEST 0.0
 #define BU_WEST 1.0
-#define CU_WEST 0.0
+#define CU_WEST U_IN
 
-#define AU_EAST 0.0
-#define BU_EAST 1.0
+#define AU_EAST 1.0
+#define BU_EAST 0.0
 #define CU_EAST 0.0
 
 #define AU_SOUTH 0.0
@@ -190,15 +191,15 @@ double WORST_DIV = 0.0;
 
 #define AU_NORTH 0.0
 #define BU_NORTH 1.0
-#define CU_NORTH U_LID
+#define CU_NORTH 0.0
 
 //v
 #define AV_WEST 0.0
 #define BV_WEST 1.0
 #define CV_WEST 0.0
 
-#define AV_EAST 0.0
-#define BV_EAST 1.0
+#define AV_EAST 1.0
+#define BV_EAST 0.0
 #define CV_EAST 0.0
 
 #define AV_SOUTH 0.0
@@ -214,8 +215,8 @@ double WORST_DIV = 0.0;
 #define BP_WEST 0.0
 #define CP_WEST 0.0
 
-#define AP_EAST 1.0
-#define BP_EAST 0.0
+#define AP_EAST 0.0
+#define BP_EAST 1.0
 #define CP_EAST 0.0
 
 #define AP_SOUTH 1.0
@@ -231,13 +232,21 @@ double BC_A_S[3], BC_B_S[3], BC_C_S[3];
 double BC_A_E[3], BC_B_E[3], BC_C_E[3];
 double BC_A_N[3], BC_B_N[3], BC_C_N[3];
 
+// true when the normal-velocity BC on that face is not Dirichlet (b == 0),
+// i.e. the face is permeable and its velocity must come from the projection
+// rather than from the ordinary zero-gradient wall treatment.
+bool CORRECT_U_WEST = false;
+bool CORRECT_U_EAST = false;
+bool CORRECT_V_SOUTH = false;
+bool CORRECT_V_NORTH = false;
+
 void SET_GEOMETRY();
 void SET_BC_COEFF();
 void VALIDATE_BC();
 void MAKE_OUTPUT_DIR();
 void APPLYIC();
-void APPLYBC_U(Field& PHI);
-void APPLYBC_V(Field& PHI);
+void APPLYBC_U(Field& PHI, bool skipCorrected = false);
+void APPLYBC_V(Field& PHI, bool skipCorrected = false);
 void APPLYBC_P(Field& PHI);
 void SET_DELTAT();
 double CALC_CONV_U(int j, int i);
@@ -266,7 +275,7 @@ int main(int argc, char* argv[])
     const auto t_wall_start = std::chrono::steady_clock::now();
 
     CCSS = 1.0e-12;
-    LX = 1.0;
+    LX = 5.0;
     LY = 1.0;
 
     if(argc > 1)
@@ -312,7 +321,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    nu = U_LID*LX/RE;
+    nu = U_IN*LY/RE;
 
     PIN_I = 1;
     PIN_J = 1;
@@ -326,7 +335,7 @@ int main(int argc, char* argv[])
     cout << "METHOD  : Chorin projection  ->  U* = U^n + dt*(-conv+diff),"
          << "  lap(p) = (rho/dt)*div(U*),  U^{n+1} = U* - (dt/rho)*grad(p)" << endl;
     cout << "PHYSICS : Re = " << RE << "   nu = " << scientific << setprecision(4)
-         << nu << "   U_LID = " << U_LID << endl;
+         << nu << "   U_IN = " << U_IN << endl;
 
     ALLOCATE_FIELDS();
     MAKE_OUTPUT_DIR();
@@ -335,8 +344,8 @@ int main(int argc, char* argv[])
 
     APPLYIC();
 
-    APPLYBC_U(U);
-    APPLYBC_V(V);
+    APPLYBC_U(U, true);
+    APPLYBC_V(V, true);
     APPLYBC_P(P);
 
     CALC_COEFF_P();
@@ -363,24 +372,33 @@ int main(int argc, char* argv[])
         APPLYBC_P(P);
 
         CORRECTOR();
-        APPLYBC_U(U);
-        APPLYBC_V(V);
+        APPLYBC_U(U, true);
+        APPLYBC_V(V, true);
 
-        CHECK_CONTINUITY();
+        // Sampling continuity/transient diagnostics only on printing steps
+        // trades up to PRINT_EVERY steps of NaN-blowup detection latency for
+        // a cheaper hot loop.
+        const bool doPrint = ((TIMESTEP + 1) % PRINT_EVERY == 0);
 
-        const double dUdt = UPDATE_TRANSIENT();
+        double dUdt = 0.0;
+
+        if(doPrint)
+        {
+            CHECK_CONTINUITY();
+            dUdt = UPDATE_TRANSIENT();
+        }
 
         simTime += deltaT;
         TIMESTEP++;
 
-        if(TIMESTEP % 10 == 0)
+        if(doPrint)
         {
             cout << "STEP = " << setw(6) << TIMESTEP
                  << "   t = "  << fixed << setprecision(6) << simTime
                  << "   dt = " << scientific << setprecision(3) << deltaT
                  << "   ||dU/dt|| = " << setprecision(4) << dUdt
                  << "   max|div| = " << WORST_DIV
-                 << "   CG/step = " << TOTAL_CG_ITER/(long)TIMESTEP
+                 << "   CG/step (cumulative avg) = " << TOTAL_CG_ITER/(long)TIMESTEP
                  << endl;
         }
 
@@ -491,20 +509,30 @@ void VALIDATE_BC()
         for(int w=0; w<4; w++)
         {
             // Direct (wall-normal) form divides by a + b*delta; ghost
-            // (wall-tangential and pressure) form divides by b/2 - a/delta.
+            // (wall-tangential and pressure) form divides by a/delta + b/2,
+            // both in the outward-normal convention.
             const double dirden = a[w] + b[w]*d[w];
-            const double ghoden = 0.5*b[w] - a[w]/d[w];
+            const double ghoden = a[w]/d[w] + 0.5*b[w];
 
             if(fabs(dirden) < 1.0e-30 || fabs(ghoden) < 1.0e-30)
             {
                 cout << "ERROR: " << wall[w] << " boundary condition on " << comp[c]
-                     << " is degenerate -- a and b cannot both vanish, and"
-                     << " a pure-Neumann tangential/pressure wall needs a != 0."
+                     << " is degenerate -- a and b cannot both vanish, and the"
+                     << " ghost-cell relation needs a/delta + b/2 != 0 (in"
+                     << " particular a pure-Neumann wall, b == 0, needs a != 0)."
                      << endl;
                 exit(1);
             }
         }
     }
+
+    // Faces whose normal-velocity BC is not Dirichlet (b == 0) are permeable;
+    // CORRECTOR must set their velocity from the projection instead of the
+    // ordinary zero-gradient treatment applied by APPLYBC_U/APPLYBC_V.
+    CORRECT_U_WEST  = (fabs(BC_B_W[0]) < 1.0e-30);
+    CORRECT_U_EAST  = (fabs(BC_B_E[0]) < 1.0e-30);
+    CORRECT_V_SOUTH = (fabs(BC_B_S[1]) < 1.0e-30);
+    CORRECT_V_NORTH = (fabs(BC_B_N[1]) < 1.0e-30);
 
     // A pressure field determined only by its normal derivative is fixed only up
     // to an additive constant; the Poisson matrix is then singular and CG needs
@@ -560,6 +588,10 @@ void APPLYIC()
     }
 }
 
+// All three helpers use the OUTWARD-normal convention: the derivative term
+// is (phi_wall - phi_interior)/delta for WALL_VALUE and
+// (phi_ghost - phi_interior)/delta for the ghost relation, i.e. n points out
+// of the domain in both a*dphi/dn + b*phi = c forms.
 inline double WALL_VALUE(double a, double b, double c, double delta, double phi_int)
 {
     return (a*phi_int + c*delta)/(a + b*delta);
@@ -567,12 +599,12 @@ inline double WALL_VALUE(double a, double b, double c, double delta, double phi_
 
 inline double GHOST_SLOPE(double a, double b, double delta)
 {
-    return -(a/delta + 0.5*b)/(0.5*b - a/delta);
+    return (a/delta - 0.5*b)/(a/delta + 0.5*b);
 }
 
 inline double GHOST_OFFSET(double a, double b, double c, double delta)
 {
-    return c/(0.5*b - a/delta);
+    return c/(a/delta + 0.5*b);
 }
 
 inline double GHOST_VALUE(double a, double b, double c, double delta, double phi_int)
@@ -580,17 +612,20 @@ inline double GHOST_VALUE(double a, double b, double c, double delta, double phi
     return GHOST_SLOPE(a,b,delta)*phi_int + GHOST_OFFSET(a,b,c,delta);
 }
 
-void APPLYBC_U(Field& PHI)
+void APPLYBC_U(Field& PHI, bool skipCorrected)
 {
     const double aW = BC_A_W[0], bW = BC_B_W[0], cW = BC_C_W[0];
     const double aE = BC_A_E[0], bE = BC_B_E[0], cE = BC_C_E[0];
     const double aS = BC_A_S[0], bS = BC_B_S[0], cS = BC_C_S[0];
     const double aN = BC_A_N[0], bN = BC_B_N[0], cN = BC_C_N[0];
 
+    const bool skipW = skipCorrected && CORRECT_U_WEST;
+    const bool skipE = skipCorrected && CORRECT_U_EAST;
+
     for(int j=0; j<=NY+1; j++)
     {
-        PHI[IDU(j,0)]  = WALL_VALUE(aW,bW,cW,DELX,PHI[IDU(j,1)]);
-        PHI[IDU(j,NX)] = WALL_VALUE(aE,bE,cE,DELX,PHI[IDU(j,NX-1)]);
+        if(!skipW) PHI[IDU(j,0)]  = WALL_VALUE(aW,bW,cW,DELX,PHI[IDU(j,1)]);
+        if(!skipE) PHI[IDU(j,NX)] = WALL_VALUE(aE,bE,cE,DELX,PHI[IDU(j,NX-1)]);
     }
 
     for(int i=0; i<=NX; i++)
@@ -600,18 +635,21 @@ void APPLYBC_U(Field& PHI)
     }
 }
 
-void APPLYBC_V(Field& PHI)
+void APPLYBC_V(Field& PHI, bool skipCorrected)
 {
     const double aW = BC_A_W[1], bW = BC_B_W[1], cW = BC_C_W[1];
     const double aE = BC_A_E[1], bE = BC_B_E[1], cE = BC_C_E[1];
     const double aS = BC_A_S[1], bS = BC_B_S[1], cS = BC_C_S[1];
     const double aN = BC_A_N[1], bN = BC_B_N[1], cN = BC_C_N[1];
 
+    const bool skipS = skipCorrected && CORRECT_V_SOUTH;
+    const bool skipN = skipCorrected && CORRECT_V_NORTH;
+
     // south and north walls: v sits ON them
     for(int i=0; i<=NX+1; i++)
     {
-        PHI[IDV(0,i)]  = WALL_VALUE(aS, bS, cS, DELY, PHI[IDV(1,i)]);
-        PHI[IDV(NY,i)] = WALL_VALUE(aN, bN, cN, DELY, PHI[IDV(NY-1,i)]);
+        if(!skipS) PHI[IDV(0,i)]  = WALL_VALUE(aS, bS, cS, DELY, PHI[IDV(1,i)]);
+        if(!skipN) PHI[IDV(NY,i)] = WALL_VALUE(aN, bN, cN, DELY, PHI[IDV(NY-1,i)]);
     }
 
     // west and east ghost columns
@@ -1121,6 +1159,18 @@ void CORRECTOR()
 
             u[p] = us[p] - facx*(p_[IDP(j,i+1)] - p_[IDP(j,i)]);
         }
+
+        if(CORRECT_U_WEST)
+        {
+            const size_t p = IDU(j,0);
+            u[p] = us[p] - facx*(p_[IDP(j,1)] - p_[IDP(j,0)]);
+        }
+
+        if(CORRECT_U_EAST)
+        {
+            const size_t p = IDU(j,NX);
+            u[p] = us[p] - facx*(p_[IDP(j,NX+1)] - p_[IDP(j,NX)]);
+        }
     }
 
     for(int j=1; j<=NY-1; j++)
@@ -1130,6 +1180,24 @@ void CORRECTOR()
             const size_t p = IDV(j,i);
 
             v[p] = vs[p] - facy*(p_[IDP(j+1,i)] - p_[IDP(j,i)]);
+        }
+    }
+
+    if(CORRECT_V_SOUTH)
+    {
+        for(int i=1; i<=NX; i++)
+        {
+            const size_t p = IDV(0,i);
+            v[p] = vs[p] - facy*(p_[IDP(1,i)] - p_[IDP(0,i)]);
+        }
+    }
+
+    if(CORRECT_V_NORTH)
+    {
+        for(int i=1; i<=NX; i++)
+        {
+            const size_t p = IDV(NY,i);
+            v[p] = vs[p] - facy*(p_[IDP(NY+1,i)] - p_[IDP(NY,i)]);
         }
     }
 }
@@ -1227,11 +1295,11 @@ void CHECK_MASS_BALANCE()
          << "   Qe = " << Qe << "   Qs = " << Qs << "   Qn = " << Qn << endl;
     cout << "          net = " << net
          << "   normalised = " << (scale > 0.0 ? net/scale : 0.0)
-         << "   (-> 0 for an impermeable cavity)" << endl;
+         << "   (-> 0 when inflow balances outflow through the channel)" << endl;
     cout << "          sum(div*VOL) = " << dvol
          << "   (equals the net wall flow by the divergence theorem)" << endl;
     cout << "CONTINUITY: max|div(U)| final = " << dmax
-         << "   worst over the run = " << WORST_DIV
+         << "   worst sampled (every " << PRINT_EVERY << " steps) = " << WORST_DIV
          << "   (-> CG tolerance, not discretisation error)" << endl;
     cout << "          RMS ||div|| = " << CALC_NORM(DIV) << endl;
 }
@@ -1239,7 +1307,7 @@ void CHECK_MASS_BALANCE()
 void WRITE_FILE_TRANSIENT()
 {
     char fname[512];
-    snprintf(fname, sizeof(fname), OUTPUT_DIR "/ldc_%05d.dat", TIMESTEP);
+    snprintf(fname, sizeof(fname), OUTPUT_DIR "/ns_%05d.dat", TIMESTEP);
 
     ofstream out(fname);
     if(!out.is_open())
@@ -1250,37 +1318,37 @@ void WRITE_FILE_TRANSIENT()
 
     out << fixed << setprecision(8);
 
-    out << "TITLE = \"2D Incompressible Navier-Stokes (staggered MAC, Chorin projection)\"" << endl;
-    out << "VARIABLES = \"X\", \"Y\", \"U\", \"V\", \"P\", \"VMAG\"" << endl;
+    out << "TITLE = \"2D Incompressible Navier-Stokes (staggered MAC, Chorin projection)\"" << '\n';
+    out << "VARIABLES = \"X\", \"Y\", \"U\", \"V\", \"P\", \"VMAG\"" << '\n';
     out << "ZONE T=\"t=" << simTime << "\""
         << ", I=" << NX+1 << ", J=" << NY+1
         << ", DATAPACKING=BLOCK, VARLOCATION=([3,4,5,6]=CELLCENTERED)"
-        << ", STRANDID=1, SOLUTIONTIME=" << simTime << endl;
+        << ", STRANDID=1, SOLUTIONTIME=" << simTime << '\n';
 
     for(int j=0;j<=NY;j++)
-        for(int i=0;i<=NX;i++) out << (double)i*DELX << endl;
+        for(int i=0;i<=NX;i++) out << (double)i*DELX << '\n';
 
     for(int j=0;j<=NY;j++)
-        for(int i=0;i<=NX;i++) out << (double)j*DELY << endl;
+        for(int i=0;i<=NX;i++) out << (double)j*DELY << '\n';
 
     for(int j=1;j<=NY;j++)
         for(int i=1;i<=NX;i++)
-            out << 0.5*(U[IDU(j,i-1)] + U[IDU(j,i)]) << endl;
+            out << 0.5*(U[IDU(j,i-1)] + U[IDU(j,i)]) << '\n';
 
     for(int j=1;j<=NY;j++)
         for(int i=1;i<=NX;i++)
-            out << 0.5*(V[IDV(j-1,i)] + V[IDV(j,i)]) << endl;
+            out << 0.5*(V[IDV(j-1,i)] + V[IDV(j,i)]) << '\n';
 
     for(int j=1;j<=NY;j++)
         for(int i=1;i<=NX;i++)
-            out << P[IDP(j,i)] << endl;
+            out << P[IDP(j,i)] << '\n';
 
     for(int j=1;j<=NY;j++)
         for(int i=1;i<=NX;i++)
         {
             const double uc = 0.5*(U[IDU(j,i-1)] + U[IDU(j,i)]);
             const double vc = 0.5*(V[IDV(j-1,i)] + V[IDV(j,i)]);
-            out << sqrt(uc*uc + vc*vc) << endl;
+            out << sqrt(uc*uc + vc*vc) << '\n';
         }
 
     out.close();
@@ -1289,7 +1357,7 @@ void WRITE_FILE_TRANSIENT()
 void WRITE_FILE_TRANSIENT_VTK()
 {
     char fname[512];
-    snprintf(fname, sizeof(fname), OUTPUT_DIR "/ldc_%05d.vtk", TIMESTEP);
+    snprintf(fname, sizeof(fname), OUTPUT_DIR "/ns_%05d.vtk", TIMESTEP);
 
     ofstream out(fname);
     if(!out.is_open())
@@ -1300,46 +1368,46 @@ void WRITE_FILE_TRANSIENT_VTK()
 
     out << fixed << setprecision(8);
 
-    out << "# vtk DataFile Version 3.0" << endl;
+    out << "# vtk DataFile Version 3.0" << '\n';
     out << "2D Incompressible Navier-Stokes (staggered MAC, Chorin projection), t = "
-        << simTime << endl;
-    out << "ASCII" << endl;
-    out << "DATASET RECTILINEAR_GRID" << endl;
-    out << "DIMENSIONS " << NX+1 << " " << NY+1 << " " << 1 << endl;
+        << simTime << '\n';
+    out << "ASCII" << '\n';
+    out << "DATASET RECTILINEAR_GRID" << '\n';
+    out << "DIMENSIONS " << NX+1 << " " << NY+1 << " " << 1 << '\n';
 
-    out << "X_COORDINATES " << NX+1 << " double" << endl;
-    for(int i=0;i<=NX;i++) out << (double)i*DELX << endl;
+    out << "X_COORDINATES " << NX+1 << " double" << '\n';
+    for(int i=0;i<=NX;i++) out << (double)i*DELX << '\n';
 
-    out << "Y_COORDINATES " << NY+1 << " double" << endl;
-    for(int j=0;j<=NY;j++) out << (double)j*DELY << endl;
+    out << "Y_COORDINATES " << NY+1 << " double" << '\n';
+    for(int j=0;j<=NY;j++) out << (double)j*DELY << '\n';
 
-    out << "Z_COORDINATES 1 double" << endl;
-    out << 0.0 << endl;
+    out << "Z_COORDINATES 1 double" << '\n';
+    out << 0.0 << '\n';
 
-    out << "CELL_DATA " << NX*NY << endl;
+    out << "CELL_DATA " << NX*NY << '\n';
 
-    out << "SCALARS Pressure double 1" << endl;
-    out << "LOOKUP_TABLE default" << endl;
+    out << "SCALARS Pressure double 1" << '\n';
+    out << "LOOKUP_TABLE default" << '\n';
     for(int j=1;j<=NY;j++)
-        for(int i=1;i<=NX;i++) out << P[IDP(j,i)] << endl;
+        for(int i=1;i<=NX;i++) out << P[IDP(j,i)] << '\n';
 
-    out << "SCALARS VMAG double 1" << endl;
-    out << "LOOKUP_TABLE default" << endl;
+    out << "SCALARS VMAG double 1" << '\n';
+    out << "LOOKUP_TABLE default" << '\n';
     for(int j=1;j<=NY;j++)
         for(int i=1;i<=NX;i++)
         {
             const double uc = 0.5*(U[IDU(j,i-1)] + U[IDU(j,i)]);
             const double vc = 0.5*(V[IDV(j-1,i)] + V[IDV(j,i)]);
-            out << sqrt(uc*uc + vc*vc) << endl;
+            out << sqrt(uc*uc + vc*vc) << '\n';
         }
 
-    out << "VECTORS Velocity double" << endl;
+    out << "VECTORS Velocity double" << '\n';
     for(int j=1;j<=NY;j++)
         for(int i=1;i<=NX;i++)
         {
             const double uc = 0.5*(U[IDU(j,i-1)] + U[IDU(j,i)]);
             const double vc = 0.5*(V[IDV(j-1,i)] + V[IDV(j,i)]);
-            out << uc << " " << vc << " " << 0.0 << endl;
+            out << uc << " " << vc << " " << 0.0 << '\n';
         }
 
     out.close();
